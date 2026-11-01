@@ -26,6 +26,25 @@ let hitTargets = [];
 let carouselStart = 0;
 let humanLabelScale = 0;
 let targetHumanLabelScale = 0;
+let mode = "landing";
+let previousMode = "landing";
+let transitionStartedAt = 0;
+let gridScroll = 0;
+let gridLayout = [];
+let guidedRound = 0;
+let guidedChoices = [];
+let guidedHistory = [];
+let guidedSelection = null;
+let guidedDeck = [];
+let guidedSeen = new Set();
+const visitedImages = new Set();
+const interactedImages = new Set();
+const guidedPrompts = [
+  "Which of these spaces feels like a ruin?",
+  "Select a space with personal meaning.",
+  "Which image feels most abandoned?",
+  "Choose the space that feels least human."
+];
 
 function preload() {
   loadJSON(
@@ -85,6 +104,7 @@ function setup() {
   textFont("monospace");
   textStyle(NORMAL);
   updateMachineMetadata();
+  visitedImages.add(selectedImageIndex);
 }
 
 function draw() {
@@ -96,9 +116,104 @@ function draw() {
     return;
   }
 
-  drawHeaderAndCarousel();
-  drawWorkspaces();
-  drawMenuBar();
+  if (mode === "landing") drawLanding();
+  else if (mode === "guided") drawGuidedStudy();
+  else if (mode === "grid") drawGridOverlay();
+  else drawArchiveView();
+
+  drawModeTransition();
+}
+
+function drawLanding() {
+  const cx = width / 2;
+  fill(237);
+  noStroke();
+  textAlign(CENTER, TOP);
+  textStyle(BOLD);
+  textSize(min(42, max(26, width / 20)));
+  text("UNCERTAIN ARCHIVE", cx, height * 0.16);
+  textStyle(NORMAL);
+  fill(130);
+  textSize(11);
+  text("CHOOSE HOW YOU WANT TO ENTER THE COLLECTION", cx, height * 0.16 + 58);
+
+  const cardW = min(390, (width - 72) / 2);
+  const cardH = min(220, height * 0.31);
+  const gap = 24;
+  const startX = cx - cardW - gap / 2;
+  const cardY = height * 0.38;
+  const cards = [
+    ["EXPLORE ARCHIVE", "FREE EXPLORATION", "Browse the full archive, inspect machine vision, and add your own human tags.", () => enterMode("explore")],
+    ["GUIDED STUDY", "QUICK Q&A CHALLENGE", "Complete 4 short rounds from a small selection of images.", () => enterMode("guided")]
+  ];
+
+  cards.forEach((card, index) => {
+    const x = index === 0 ? startX : cx + gap / 2;
+    const hover = mouseX >= x && mouseX <= x + cardW && mouseY >= cardY && mouseY <= cardY + cardH;
+    stroke(hover ? color(214, 255, 84) : color(83));
+    fill(hover ? color(28, 31, 22) : color(18));
+    rect(x, cardY, cardW, cardH);
+    noStroke();
+    fill(214, 255, 84);
+    textAlign(LEFT, TOP);
+    textStyle(BOLD);
+    textSize(18);
+    text(card[0], x + 24, cardY + 28);
+    textStyle(NORMAL);
+    fill(135);
+    textSize(9);
+    text(card[1], x + 24, cardY + 58);
+    fill(210);
+    textSize(12);
+    text(card[2], x + 24, cardY + 94, cardW - 48, 70);
+    fill(214, 255, 84);
+    textSize(10);
+    text("ENTER  →", x + 24, cardY + cardH - 34);
+    addHitTarget(x, cardY, cardW, cardH, card[3]);
+  });
+
+  fill(105);
+  textAlign(CENTER, BOTTOM);
+  textSize(9);
+  text(`${getAvailableImages().length || 239} IMAGE MEDIA POOL`, cx, height - 24);
+}
+
+function drawGridToggle() {
+  const label = "∷  GRID / PROGRESS";
+  textAlign(RIGHT, CENTER);
+  textSize(9);
+  const w = 118;
+  const gap = 7;
+  const switchW = 104;
+  const x = width - 24 - switchW - gap - w;
+  const buttonRight = x + w;
+  const y = 12;
+  const hover = mouseX >= x && mouseX <= buttonRight && mouseY >= y && mouseY <= y + 26;
+  stroke(hover ? color(214, 255, 84) : color(82));
+  fill(hover ? color(45, 52, 24) : color(18));
+  rect(x, y, w, 26);
+  noStroke();
+  fill(hover ? color(214, 255, 84) : color(185));
+  textAlign(CENTER, CENTER);
+  text(label, x + w / 2, y + 13);
+  addHitTarget(x, y, w, 26, () => enterMode("grid"));
+
+  drawModeSwitchToggle(buttonRight + gap, y);
+}
+
+function drawModeSwitchToggle(x, y) {
+  const w = 104;
+  const label = "MODE / SWITCH";
+  const hover = mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + 26;
+  stroke(hover ? color(214, 255, 84) : color(82));
+  fill(hover ? color(45, 52, 24) : color(18));
+  rect(x, y, w, 26);
+  noStroke();
+  fill(hover ? color(214, 255, 84) : color(185));
+  textAlign(CENTER, CENTER);
+  textSize(9);
+  text(label, x + w / 2, y + 13);
+  addHitTarget(x, y, w, 26, resetToLanding);
 }
 
 function drawHeaderAndCarousel() {
@@ -116,8 +231,10 @@ function drawHeaderAndCarousel() {
   const poolStatus = unavailableCount
     ? `${getAvailableImages().length}/${archiveImageCount} LOADED  /  ${unavailableCount} MISSING`
     : `${getAvailableImages().length} IMAGES IN MEDIA POOL`;
-  text(poolStatus, width - 24, 25);
+  text(poolStatus, width - 260, 25);
   textAlign(RIGHT, CENTER);
+
+  drawGridToggle();
 
   stroke(75);
   line(24, 45, width - 24, 45);
@@ -377,6 +494,19 @@ function drawMachinePanel(x, y, panelWidth, panelHeight) {
 }
 
 function drawMenuBar() {
+  const actions = [
+    ["SHUFFLE ARCHIVE", shuffleArchive],
+    ["CLASSIFY / TAG", () => {
+      taggingPrompt = !taggingPrompt;
+    }],
+    ["RESTART", restartArchive],
+    ["SWITCH MODE", resetToLanding],
+    ["END / FINISH SESSION", startEnding]
+  ];
+  drawBottomActions(actions);
+}
+
+function drawBottomActions(actions) {
   const menuHeight = getMenuHeight();
   const menuY = height - menuHeight;
   stroke(84);
@@ -385,14 +515,6 @@ function drawMenuBar() {
   fill(11);
   rect(0, menuY + 1, width, menuHeight);
 
-  const actions = [
-    ["SHUFFLE ARCHIVE", shuffleArchive],
-    ["CLASSIFY / TAG", () => {
-      taggingPrompt = !taggingPrompt;
-    }],
-    ["RESTART", restartArchive],
-    ["END / FINISH SESSION", startEnding]
-  ];
   const buttonGap = 8;
   const sidePadding = 22;
   const buttonWidth = (width - sidePadding * 2 - buttonGap * (actions.length - 1)) / actions.length;
@@ -401,10 +523,11 @@ function drawMenuBar() {
 
   actions.forEach(([label, action], index) => {
     const x = sidePadding + index * (buttonWidth + buttonGap);
-    const isActive = index === 1 && taggingPrompt;
+    const isActive = (index === 1 && taggingPrompt) || (mode === "guided" && guidedSelection && label === "SUBMIT SELECTION");
     const isEndAction = index === actions.length - 1;
-    stroke(isActive ? color(214, 255, 84) : isEndAction ? color(144, 91, 82) : color(115));
-    fill(isActive ? color(45, 52, 24, 235) : isEndAction ? color(58, 29, 27, 225) : color(34, 36, 35, 230));
+    const isHover = mouseX >= x && mouseX <= x + buttonWidth && mouseY >= buttonY && mouseY <= buttonY + buttonHeight;
+    stroke(isActive || isHover ? color(214, 255, 84) : isEndAction ? color(144, 91, 82) : color(115));
+    fill(isActive ? color(45, 52, 24, 235) : isEndAction ? color(58, 29, 27, 225) : isHover ? color(42, 44, 42, 235) : color(34, 36, 35, 230));
     rect(x, buttonY, buttonWidth, buttonHeight);
     noStroke();
     fill(isActive ? color(214, 255, 84) : isEndAction ? color(239, 177, 156) : color(238));
@@ -417,11 +540,164 @@ function drawMenuBar() {
   });
 }
 
+function drawGridOverlay() {
+  background(12);
+  const pad = 24;
+  const top = 78;
+  fill(237);
+  noStroke();
+  textAlign(LEFT, TOP);
+  textStyle(BOLD);
+  textSize(16);
+  text("ARCHIVE / GRID PROGRESS", pad, 24);
+  textStyle(NORMAL);
+  fill(120);
+  textSize(10);
+  const interacted = interactedImages.size;
+  text(`${interacted} LABELED  /  ${visitedImages.size} VISITED  /  ${getAvailableImages().length} TOTAL`, pad, 50);
+
+  const closeW = 96;
+  stroke(92);
+  fill(18);
+  rect(width - pad - closeW, 22, closeW, 30);
+  noStroke();
+  fill(214, 255, 84);
+  textAlign(CENTER, CENTER);
+  textSize(10);
+  text("CLOSE  ×", width - pad - closeW / 2, 37);
+  addHitTarget(width - pad - closeW, 22, closeW, 30, () => enterMode("explore"));
+
+  const gap = 8;
+  const columns = constrain(floor((width - pad * 2) / 118), 3, 12);
+  const columnWidth = (width - pad * 2 - gap * (columns - 1)) / columns;
+  const columnHeights = Array(columns).fill(0);
+  const available = getAvailableImages();
+  gridLayout = [];
+
+  available.forEach((entry, index) => {
+    const column = columnHeights.indexOf(min(...columnHeights));
+    const thumbH = columnWidth * (0.72 + (index % 5) * 0.09);
+    const thumbY = top + columnHeights[column] - gridScroll;
+    const thumbX = pad + column * (columnWidth + gap);
+    gridLayout.push({ entry, x: thumbX, y: thumbY, w: columnWidth, h: thumbH });
+    columnHeights[column] += thumbH + gap;
+
+    if (thumbY + thumbH < 0 || thumbY > height) return;
+    const active = entry.index === selectedImageIndex;
+    const labeled = interactedImages.has(entry.index);
+    const visited = visitedImages.has(entry.index);
+    stroke(labeled ? color(214, 255, 84) : active ? color(235) : color(58));
+    strokeWeight(labeled || active ? 2 : 1);
+    fill(25);
+    rect(thumbX, thumbY, columnWidth, thumbH);
+    if (visited || labeled) drawImageCover(entry.image, thumbX + 2, thumbY + 2, columnWidth - 4, thumbH - 4);
+    else {
+      tint(255, 65);
+      drawImageCover(entry.image, thumbX + 2, thumbY + 2, columnWidth - 4, thumbH - 4);
+      noTint();
+    }
+    strokeWeight(1);
+    if (labeled) {
+      fill(214, 255, 84);
+      noStroke();
+      circle(thumbX + columnWidth - 9, thumbY + 9, 12);
+    }
+    addHitTarget(thumbX, thumbY, columnWidth, thumbH, () => {
+      selectImage(entry.index);
+      enterMode("explore");
+    });
+  });
+
+  const contentH = max(...columnHeights) + top;
+  gridScroll = constrain(gridScroll, 0, max(0, contentH - height + 24));
+}
+
+function drawGuidedStudy() {
+  background(12);
+  const cx = width / 2;
+  fill(214, 255, 84);
+  noStroke();
+  textAlign(CENTER, TOP);
+  textSize(10);
+  text(`GUIDED STUDY  /  ROUND ${min(guidedRound + 1, guidedPrompts.length)} OF ${guidedPrompts.length}`, cx, 28);
+
+  if (guidedRound >= guidedPrompts.length) {
+    fill(237);
+    textStyle(BOLD);
+    textSize(min(28, width / 18));
+    text("STUDY COMPLETE", cx, height * 0.34);
+    textStyle(NORMAL);
+    fill(140);
+    textSize(12);
+    text(`${guidedHistory.length} CHOICES RECORDED`, cx, height * 0.34 + 48);
+    drawGuidedMenuBar();
+    return;
+  }
+
+  fill(235);
+  textStyle(BOLD);
+  textSize(min(24, max(16, width / 36)));
+  text(guidedPrompts[guidedRound], cx, 72, min(width - 48, 900));
+  textStyle(NORMAL);
+  const gap = 14;
+  const choiceWidth = min(230, (width - 48 - gap * (guidedChoices.length - 1)) / max(1, guidedChoices.length));
+  const totalWidth = choiceWidth * guidedChoices.length + gap * (guidedChoices.length - 1);
+  const choiceX = cx - totalWidth / 2;
+  const choiceY = height * 0.26;
+  const choiceH = min(340, height * 0.52);
+  guidedChoices.forEach((entry, index) => {
+    const x = choiceX + index * (choiceWidth + gap);
+    const selected = guidedSelection && guidedSelection.index === entry.index;
+    const hover = mouseX >= x && mouseX <= x + choiceWidth && mouseY >= choiceY && mouseY <= choiceY + choiceH;
+    stroke(selected ? color(214, 255, 84) : hover ? color(170) : color(75));
+    strokeWeight(selected ? 3 : 1);
+    fill(18);
+    rect(x, choiceY, choiceWidth, choiceH);
+    drawImageContain(entry.image, x + 8, choiceY + 8, choiceWidth - 16, choiceH - 16);
+    strokeWeight(1);
+    addHitTarget(x, choiceY, choiceWidth, choiceH, () => {
+      guidedSelection = entry;
+      visitedImages.add(entry.index);
+    });
+  });
+
+  drawGuidedMenuBar();
+}
+
+function drawGuidedMenuBar() {
+  const actions = guidedRound >= guidedPrompts.length
+    ? [
+      ["MODE SELECT", () => enterMode("landing")],
+      ["RESTART CHALLENGE", startGuidedStudy],
+      ["END / FINISH SESSION", startEnding]
+    ]
+    : [
+      ["MODE SELECT", () => enterMode("landing")],
+      ["SUBMIT SELECTION", submitGuidedSelection],
+      ["NEXT QUESTION", submitGuidedSelection],
+      ["END / FINISH SESSION", startEnding]
+    ];
+  drawBottomActions(actions);
+}
+
+function drawSimpleButton(x, y, w, h, label, action) {
+  stroke(100);
+  fill(18);
+  rect(x, y, w, h);
+  noStroke();
+  fill(214, 255, 84);
+  textAlign(CENTER, CENTER);
+  textSize(10);
+  text(label, x + w / 2, y + h / 2);
+  addHitTarget(x, y, w, h, action);
+}
+
 function drawEnding() {
   const fadeDuration = 1700;
   const elapsed = millis() - endingStartedAt;
   if (endingState === "out") {
-    drawArchiveView();
+    if (mode === "guided") drawGuidedStudy(false);
+    else drawArchiveView();
     const alpha = 255 * easeInOut(constrain(elapsed / fadeDuration, 0, 1));
     fill(0, alpha);
     noStroke();
@@ -468,7 +744,7 @@ function drawEnding() {
   fill(214, 255, 84, buttonAlpha);
   textAlign(CENTER, CENTER);
   textSize(10);
-  text("RETURN TO ARCHIVE  /  R", width / 2, buttonY + buttonHeight / 2);
+  text("RETURN TO HOMEPAGE  /  R", width / 2, buttonY + buttonHeight / 2);
   if (elapsed >= 500) {
     addHitTarget(buttonX, buttonY, buttonWidth, buttonHeight, returnToArchive);
   }
@@ -484,6 +760,7 @@ function drawArchiveView() {
 function selectImage(index) {
   if (!images.some(entry => entry.index === index)) return;
   selectedImageIndex = index;
+  visitedImages.add(index);
   taggingPrompt = false;
   ensureSelectedImageVisible();
   updateMachineMetadata();
@@ -492,16 +769,105 @@ function selectImage(index) {
 function toggleTag(tag) {
   const selected = getSelectedImage();
   if (!selected) return;
+  interactedImages.add(selected.index);
+  visitedImages.add(selected.index);
 
   const tagIndex = selected.tags.indexOf(tag);
   if (tagIndex === -1) selected.tags.push(tag);
   else selected.tags.splice(tagIndex, 1);
 }
 
+function resetToLanding() {
+  for (const entry of getAvailableImages()) entry.tags = [];
+  visitedImages.clear();
+  interactedImages.clear();
+  guidedHistory = [];
+  guidedRound = 0;
+  guidedSelection = null;
+  guidedChoices = [];
+  guidedDeck = [];
+  guidedSeen = new Set();
+  selectedImageIndex = getAvailableImages()[0]?.index ?? 0;
+  carouselStart = 0;
+  gridScroll = 0;
+  taggingPrompt = false;
+  targetHumanLabelScale = 0;
+  humanLabelScale = 0;
+  endingState = "idle";
+  previousMode = "landing";
+  mode = "landing";
+  transitionStartedAt = millis();
+  updateMachineMetadata();
+}
+
+function enterMode(nextMode) {
+  previousMode = mode;
+  mode = nextMode;
+  transitionStartedAt = millis();
+  if (nextMode === "guided") startGuidedStudy();
+  if (nextMode === "grid") gridScroll = 0;
+}
+
+function startGuidedStudy() {
+  guidedRound = 0;
+  guidedHistory = [];
+  guidedSelection = null;
+  guidedSeen = new Set();
+  guidedDeck = shuffle([...getAvailableImages()]);
+  prepareGuidedChoices();
+}
+
+function prepareGuidedChoices() {
+  const choiceCount = constrain(floor(width / 260), 3, 6);
+  guidedChoices = [];
+
+  while (guidedChoices.length < choiceCount) {
+    if (guidedDeck.length === 0) {
+      // Refill only after the current random deck is exhausted. Clear the seen
+      // set only if a very small loaded pool cannot fill the requested options.
+      const remaining = getAvailableImages().filter(entry => !guidedSeen.has(entry.index));
+      guidedDeck = shuffle(remaining.length >= choiceCount
+        ? remaining
+        : [...getAvailableImages()]);
+      if (guidedDeck.length === 0) break;
+    }
+
+    const entry = guidedDeck.shift();
+    if (!entry || guidedSeen.has(entry.index)) continue;
+    guidedChoices.push(entry);
+    guidedSeen.add(entry.index);
+  }
+  guidedSelection = null;
+}
+
+function submitGuidedSelection() {
+  if (!guidedSelection) return;
+  chooseGuidedImage(guidedSelection);
+}
+
+function chooseGuidedImage(entry) {
+  selectedImageIndex = entry.index;
+  visitedImages.add(entry.index);
+  interactedImages.add(entry.index);
+  guidedHistory.push(entry.index);
+  guidedRound++;
+  if (guidedRound < guidedPrompts.length) prepareGuidedChoices();
+}
+
+function drawModeTransition() {
+  const elapsed = millis() - transitionStartedAt;
+  if (elapsed >= 420) return;
+  const alpha = 255 * sin(constrain(elapsed / 420, 0, 1) * PI);
+  fill(0, alpha);
+  noStroke();
+  rect(0, 0, width, height);
+}
+
 function shuffleArchive() {
   if (images.length < 1) return;
   const next = images[floor(random(images.length))];
   selectedImageIndex = next.index;
+  visitedImages.add(next.index);
   next.tags = [];
   taggingPrompt = false;
   ensureSelectedImageVisible();
@@ -523,9 +889,7 @@ function startEnding() {
 }
 
 function returnToArchive() {
-  restartArchive();
-  endingState = "in";
-  endingStartedAt = millis();
+  resetToLanding();
 }
 
 function updateMachineMetadata() {
@@ -567,6 +931,11 @@ function mousePressed() {
 
 function mouseWheel(event) {
   if (endingState !== "idle") return false;
+  if (mode === "grid") {
+    gridScroll += event.delta > 0 ? 48 : -48;
+    gridScroll = constrain(gridScroll, 0, max(0, height + 239 * 120));
+    return false;
+  }
   const topHeight = getTopHeight();
   if (mouseY > 45 && mouseY < topHeight) {
     const available = getAvailableImages();
@@ -588,6 +957,10 @@ function mouseWheel(event) {
 }
 
 function keyPressed() {
+  if (mode === "grid" && (key === "Escape" || key === "Backspace")) {
+    enterMode(previousMode === "explore" ? "explore" : "explore");
+    return false;
+  }
   if (endingState === "question" && (key === "r" || key === "R")) {
     returnToArchive();
     return false;
